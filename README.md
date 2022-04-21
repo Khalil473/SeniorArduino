@@ -1,2 +1,3 @@
-# SeniorArduino
-A repository for the Arduino codes for each component
+# DHT22 Testing
+
+### A C code to test DHT22 module and to show the library methods.
