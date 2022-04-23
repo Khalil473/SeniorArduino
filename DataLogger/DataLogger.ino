@@ -14,11 +14,16 @@
 #define RTCCLK 5
 #define RTCRST 9
 
+#define HUMIDITY 'h'
+#define TEMPREATURE 't'
+
+#define TIME_BETWEEN_SAVES 60000 // 1 MIN
+
 struct DHTData
 {
   float tempreature;
   float humidity;
-  static long lastRead, lastSaved;
+  static unsigned long lastRead, lastSaved;
   DHTData()
   {
   }
@@ -27,9 +32,13 @@ struct DHTData
     this->tempreature = temp;
     this->humidity = hum;
   }
+  static bool isTimeToSave()
+  {
+    return millis() - lastSaved > TIME_BETWEEN_SAVES;
+  }
 };
-long DHTData::lastRead;
-long DHTData::lastSaved;
+unsigned long DHTData::lastRead = millis();
+unsigned long DHTData::lastSaved = millis();
 
 struct Modules
 {
@@ -46,6 +55,7 @@ struct Modules
     rtc->Begin();
     isSDinitialized = SD.begin(SDCSPIN);
     RtcDateTime compiled(__DATE__, __TIME__);
+
     if (!rtc->IsDateTimeValid())
       rtc->SetDateTime(compiled);
     if (rtc->GetIsWriteProtected())
@@ -120,7 +130,11 @@ void loop()
 
   if (modules->readDHT(dht))
   {
-    modules->writeToSD('h', dht.humidity);
-    modules->writeToSD('t', dht.tempreature);
+    if (DHTData::isTimeToSave())
+    {
+      modules->writeToSD(HUMIDITY, dht.humidity);
+      modules->writeToSD(TEMPREATURE, dht.tempreature);
+      DHTData::lastSaved = millis();
+    }
   }
 }
