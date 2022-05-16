@@ -1,7 +1,6 @@
 #include <SPI.h>
 #include <SD.h>
-#include <ThreeWire.h>
-#include <RtcDS1302.h>
+#include <virtuabotixRTC.h> 
 #include "DHT.h"
 
 #define DHTPIN 4
@@ -17,7 +16,7 @@
 #define HUMIDITY 'h'
 #define TEMPREATURE 't'
 
-#define TIME_BETWEEN_SAVES 60000 // 1 MIN
+#define TIME_BETWEEN_SAVES 6000 // 1 MIN
 
 struct DHTData
 {
@@ -36,6 +35,9 @@ struct DHTData
   {
     return millis() - lastSaved > TIME_BETWEEN_SAVES;
   }
+  static bool isTimeToRead(){
+    return millis() - lastRead > DHTRESPONCE;
+  }
 };
 unsigned long DHTData::lastRead = millis();
 unsigned long DHTData::lastSaved = millis();
@@ -44,67 +46,42 @@ struct Modules
 {
   DHT *dht;
   bool isSDinitialized;
-  RtcDS1302<ThreeWire> *rtc;
-
+  virtuabotixRTC myRTC=virtuabotixRTC(RTCCLK, RTCDAT, RTCRST);
   Modules()
   {
     dht = new DHT(DHTPIN, DHTTYPE);
-    ThreeWire myWire(RTCDAT, RTCCLK, RTCRST);
-    rtc = new RtcDS1302<ThreeWire>(myWire);
     dht->begin();
-    rtc->Begin();
+    myRTC.updateTime();
     isSDinitialized = SD.begin(SDCSPIN);
-    RtcDateTime compiled(__DATE__, __TIME__);
-
-    if (!rtc->IsDateTimeValid())
-      rtc->SetDateTime(compiled);
-    if (rtc->GetIsWriteProtected())
-      rtc->SetIsWriteProtected(false);
-    if (!rtc->GetIsRunning())
-      rtc->SetIsRunning(true);
-    if (rtc->GetDateTime() < compiled)
-      rtc->SetDateTime(compiled);
   }
 
   bool readDHT(DHTData &currentData)
   {
-    if (millis() - DHTData::lastRead > DHTRESPONCE)
+    if (DHTData::isTimeToRead())
     {
       DHTData::lastRead = millis();
       float humd = dht->readHumidity();
       float temp = dht->readTemperature();
       if (isnan(temp) || isnan(humd))
         return false;
-      else
-      {
-        currentData.humidity = humd;
-        currentData.tempreature = temp;
-        return true;
-      }
+      currentData.humidity = humd;
+      currentData.tempreature = temp;
+      return true;
     }
     return false;
   }
   File prepareToWrite(char &type)
   {
-    RtcDateTime current = rtc->GetDateTime();
-    String path = String(type) + '/' + String(current.Year()) + '/' + String(current.Month()) + '/';
+    myRTC.updateTime();
+      
+    String path = String(type) + '/' + String(myRTC.year) + '/' + String(myRTC.month) + '/';
     if (!SD.exists(path))
     {
       SD.mkdir(path);
     }
-    File f = SD.open(path + String(current.Day()), FILE_WRITE);
-    f.print(String(current.Hour()) + ':' + String(current.Minute()) + ":" + String(current.Second()) + ' ');
+    File f = SD.open(path + String(myRTC.dayofmonth), FILE_WRITE);
+    f.print(String(myRTC.hours) + ':' + String(myRTC.minutes) + ':' + String(myRTC.seconds) + ' ');
     return f;
-  }
-  bool writeToSD(char type, char *data)
-  {
-    File file = prepareToWrite(type);
-    if (!file)
-      return false;
-    file.print(data);
-    file.println();
-    file.close();
-    return true;
   }
   bool writeToSD(char type, float data)
   {
@@ -115,6 +92,50 @@ struct Modules
     file.println();
     file.close();
     return true;
+  }
+
+   uint8_t days_in_month (int &y, uint8_t &m) {
+      if ((m==4)||(m==11)||(m==9)||(m==6)) return 30; 
+      if (m!=2) return 31;
+      if ((y%400)==0) return 29;
+      if ((y%100)==0) return 28;
+      if ((y%4)==0)   return 29;
+  return 28;
+  }
+  
+  int retrieveData(char &type,char &period){
+    String path = String(type);
+
+  }
+  float getDayAvg(File &file){
+    float sum=0.0;
+    int count=0;
+    while(file.available()){
+            String line=file.readStringUntil('\n');
+            String data=line.substring(line.indexOf(' '));
+            sum+=data.toFloat();
+            count++;
+          }
+    file.close();
+    return (count==0) ? 0 : sum / (count*1.0);
+  }
+
+
+  int retrieveDataDays(String &starting_path,uint8_t from_day=0,uint8_t to_day=0){
+    
+    File dir = SD.open(starting_path);
+    to_day = (to_day==0) ? 31:to_day;
+    while (true) {
+      File file =  dir.openNextFile();
+      if (! file) {
+        break;
+      }
+      String name=String(file.name());
+      uint8_t file_day=name.toInt();
+      if(file_day<from_day || file_day>to_day) continue;
+      float avg=getDayAvg(file);
+  }
+  dir.close();
   }
 };
 Modules *modules;
@@ -136,5 +157,6 @@ void loop()
       modules->writeToSD(TEMPREATURE, dht.tempreature);
       DHTData::lastSaved = millis();
     }
+
   }
 }
