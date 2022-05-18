@@ -1,6 +1,6 @@
-#include <SPI.h>
+#include <SoftwareSerial.h>
 #include <SD.h>
-#include <virtuabotixRTC.h> 
+#include <virtuabotixRTC.h>
 #include "DHT.h"
 
 #define DHTPIN 4
@@ -16,49 +16,46 @@
 #define HUMIDITY 'h'
 #define TEMPREATURE 't'
 
-#define TIME_BETWEEN_SAVES 6000 // 1 MIN
+#define HM10TX 2
+#define HM10RX 3
 
-struct DHTData
-{
+#define TIME_BETWEEN_SAVES 6000  // 1 MIN
+
+struct DHTData {
   float tempreature;
   float humidity;
   static unsigned long lastRead, lastSaved;
-  DHTData()
-  {
+  DHTData() {
   }
-  DHTData(float temp, float hum)
-  {
+  DHTData(float temp, float hum) {
     this->tempreature = temp;
     this->humidity = hum;
   }
-  static bool isTimeToSave()
-  {
+  static bool isTimeToSave() {
     return millis() - lastSaved > TIME_BETWEEN_SAVES;
   }
-  static bool isTimeToRead(){
+  static bool isTimeToRead() {
     return millis() - lastRead > DHTRESPONCE;
   }
 };
 unsigned long DHTData::lastRead = millis();
 unsigned long DHTData::lastSaved = millis();
 
-struct Modules
-{
+struct Modules {
   DHT *dht;
   bool isSDinitialized;
-  virtuabotixRTC myRTC=virtuabotixRTC(RTCCLK, RTCDAT, RTCRST);
-  Modules()
-  {
+  virtuabotixRTC myRTC = virtuabotixRTC(RTCCLK, RTCDAT, RTCRST);
+  SoftwareSerial BTserial=SoftwareSerial(HM10TX, HM10RX);
+  Modules() {
     dht = new DHT(DHTPIN, DHTTYPE);
     dht->begin();
     myRTC.updateTime();
     isSDinitialized = SD.begin(SDCSPIN);
+    BTserial.begin(9600);
   }
 
-  bool readDHT(DHTData &currentData)
-  {
-    if (DHTData::isTimeToRead())
-    {
+  bool readDHT(DHTData &currentData) {
+    if (DHTData::isTimeToRead()) {
       DHTData::lastRead = millis();
       float humd = dht->readHumidity();
       float temp = dht->readTemperature();
@@ -70,21 +67,18 @@ struct Modules
     }
     return false;
   }
-  File prepareToWrite(char &type)
-  {
+  File prepareToWrite(char &type) {
     myRTC.updateTime();
-      
+
     String path = String(type) + '/' + String(myRTC.year) + '/' + String(myRTC.month) + '/';
-    if (!SD.exists(path))
-    {
+    if (!SD.exists(path)) {
       SD.mkdir(path);
     }
     File f = SD.open(path + String(myRTC.dayofmonth), FILE_WRITE);
     f.print(String(myRTC.hours) + ':' + String(myRTC.minutes) + ':' + String(myRTC.seconds) + ' ');
     return f;
   }
-  bool writeToSD(char type, float data)
-  {
+  bool writeToSD(char type, float data) {
     File file = prepareToWrite(type);
     if (!file)
       return false;
@@ -94,69 +88,85 @@ struct Modules
     return true;
   }
 
-   uint8_t days_in_month (int &y, uint8_t &m) {
-      if ((m==4)||(m==11)||(m==9)||(m==6)) return 30; 
-      if (m!=2) return 31;
-      if ((y%400)==0) return 29;
-      if ((y%100)==0) return 28;
-      if ((y%4)==0)   return 29;
-  return 28;
+  uint8_t days_in_month(int &y, uint8_t &m) {
+    if ((m == 4) || (m == 11) || (m == 9) || (m == 6)) return 30;
+    if (m != 2) return 31;
+    if ((y % 400) == 0) return 29;
+    if ((y % 100) == 0) return 28;
+    if ((y % 4) == 0) return 29;
+    return 28;
   }
-  
-  int retrieveData(char &type,char &period){
+
+  int retrieveData(char &type, char &period) {
     String path = String(type);
-
   }
-  float getDayAvg(File &file){
-    float sum=0.0;
-    int count=0;
-    while(file.available()){
-            String line=file.readStringUntil('\n');
-            String data=line.substring(line.indexOf(' '));
-            sum+=data.toFloat();
-            count++;
-          }
+  float getDayAvg(File &file) {
+    float sum = 0.0;
+    int count = 0;
+    while (file.available()) {
+      String line = file.readStringUntil('\n');
+      String data = line.substring(line.indexOf(' '));
+      sum += data.toFloat();
+      count++;
+    }
     file.close();
-    return (count==0) ? 0 : sum / (count*1.0);
+    return (count == 0) ? 0 : sum / (count * 1.0);
   }
 
 
-  int retrieveDataDays(String &starting_path,uint8_t from_day=0,uint8_t to_day=0){
-    
-    File dir = SD.open(starting_path);
-    to_day = (to_day==0) ? 31:to_day;
+  void retrieveDataDays(char &type, int &year, uint8_t &month, uint8_t from_day = 0, uint8_t to_day = 0) {
+
+    File dir = SD.open(String(type) + '/' + String(year) + '/' + String(month) + '/');
+    to_day = (to_day == 0) ? days_in_month(year, month) : to_day;
     while (true) {
-      File file =  dir.openNextFile();
-      if (! file) {
+      File file = dir.openNextFile();
+      if (!file) {
         break;
       }
-      String name=String(file.name());
-      uint8_t file_day=name.toInt();
-      if(file_day<from_day || file_day>to_day) continue;
-      float avg=getDayAvg(file);
+      String name = String(file.name());
+      uint8_t file_day = name.toInt();
+      if (file_day < from_day || file_day > to_day) continue;
+      float avg = getDayAvg(file);
+    }
+    dir.close();
   }
-  dir.close();
+
+  String readFromBLE(){
+    if(BTserial.available())
+      return BTserial.readString();
+    return "";
+  }
+  bool isAckRecived(){
+    if(BTserial.available()){
+      String data = BTserial.readString();
+      if (data=="1"){
+        return true;
+      }
+    }
+    return false;
+  }
+  bool sendToBLE(char type,float data){
+    BTserial.println(String(type)+String(data));
   }
 };
 Modules *modules;
-void setup()
-{
+void setup() {
   Serial.begin(9600);
   modules = new Modules();
 }
 
-void loop()
-{
+void loop() {
   DHTData dht;
-
-  if (modules->readDHT(dht))
-  {
-    if (DHTData::isTimeToSave())
-    {
+  String data;
+  if (modules->readDHT(dht)) {
+    if (DHTData::isTimeToSave()) {
       modules->writeToSD(HUMIDITY, dht.humidity);
       modules->writeToSD(TEMPREATURE, dht.tempreature);
       DHTData::lastSaved = millis();
     }
-
+    modules->sendToBLE(TEMPREATURE,dht.tempreature);
+    delay(1000);
+    modules->sendToBLE(HUMIDITY,dht.humidity);
+    
   }
 }
