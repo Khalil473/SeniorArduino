@@ -1,6 +1,6 @@
-# DHT22 data Logger to SD
+# DHT22 data Retrival from SD
 
-### A program that logges DHT22 data to SD each two seconds with, with appropriate files creating and error handling.
+### A program that gets the logged data from SD.
 
 #### Modules used:
 
