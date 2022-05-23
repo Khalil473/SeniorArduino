@@ -100,10 +100,6 @@ struct Modules {
     if ((y % 4) == 0) return 29;
     return 28;
   }
-
-  int retrieveData(char &type, char &period) {
-    String path = String(type);
-  }
   float getDayAvg(File &file) {
     float sum = 0.0;
     int count = 0;
@@ -113,31 +109,100 @@ struct Modules {
       sum += data.toFloat();
       count++;
     }
-    file.close();
     return (count == 0) ? 0 : sum / (count * 1.0);
   }
 
 
-  void retrieveDataDays(char &type, int &year, uint8_t &month, uint8_t from_day = 0, uint8_t to_day = 0) {
-
+  void retrieveDataDays(char type, int year, uint8_t month, uint8_t from_day = 0, uint8_t to_day = 0) {
     File dir = SD.open(String(type) + '/' + String(year) + '/' + String(month) + '/');
     to_day = (to_day == 0) ? days_in_month(year, month) : to_day;
     while (true) {
       File file = dir.openNextFile();
-      if (!file) {
+      if(!file) {
         break;
       }
       String name = String(file.name());
       uint8_t file_day = name.toInt();
-      if (file_day < from_day || file_day > to_day) continue;
+      if (file_day < from_day || file_day > to_day) {
+        file.close();
+        continue;
+        }
       float avg = getDayAvg(file);
-      Serial.println(avg);
+      file.close();
       sendToBLE('\0',avg,false);//continue in mobile to check this code
     }
     dir.close();
     sendToBLE('h',-1);
   }
 
+  void retrieveDataMonths(char &type, int &year) {
+    File year_dir = SD.open(String(type) + '/' + String(year) + '/');
+    bool save_avg=false;
+    while (true) {
+      File month_dir = year_dir.openNextFile();
+
+      if (!month_dir) {
+        break;
+      }
+      float month_avg_sum=0.0;
+      uint8_t num_of_days=0;
+      while(true){
+        File file = month_dir.openNextFile();
+        if (!file) {
+          break;
+        }
+        month_avg_sum += getDayAvg(file);
+        num_of_days++;
+        file.close();
+      }
+      month_dir.close();
+      float month_avg=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
+      sendToBLE('\0',month_avg,false);//continue in mobile to check this code
+    }
+    year_dir.close();
+    sendToBLE('h',-1);
+    delay(200);
+  }
+  void retrieveDataYears(char type){
+
+    File type_dir = SD.open(String(type) + '/');
+    while (true) {
+    File year_dir = type_dir.openNextFile();
+    if (!year_dir) {
+        break;
+    }
+    float month_avgs=0.0;
+    uint8_t num_of_months=0;
+    while (true) {
+      File month_dir = year_dir.openNextFile();
+      if (!month_dir) {
+        break;
+    }
+      float month_avg_sum=0.0;
+      uint8_t num_of_days=0;
+      while(true){
+        File file = month_dir.openNextFile();
+        if (!file) {
+          break;
+        }
+        month_avg_sum += getDayAvg(file);
+        num_of_days++;
+        file.close();
+      }
+      month_dir.close();
+      month_avgs+=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
+      num_of_months++;
+      Serial.println(String(month_avgs)+" at "+String(month_dir.name()));
+    }
+    float year_avg=(num_of_months<=0) ? 0 : month_avgs / (num_of_months*1.0);
+    Serial.println(String(year_avg)+" at "+String(year_dir.name()));
+    sendToBLE('\0',year_avg,false);
+    year_dir.close();
+    }
+    type_dir.close();
+    sendToBLE('h',-1);
+    delay(200);
+  }
   String readFromBLE(){
     if(BTserial.available())
       return BTserial.readString();
@@ -163,7 +228,7 @@ struct Modules {
   }
   bool sendToBLE(char type,float data,bool flush=true){
     static String buffer="";
-    flush = flush || buffer.length()>10;
+    flush = flush || buffer.length() + String(data).length()>14;
     String newData= ( (type=='\0') ? "":String(type))+String(data)+ ( (flush) ? "":",");
     buffer+=newData;
     if(!flush) return 1;
@@ -213,8 +278,14 @@ struct Modules {
         else
           retrieveDataDays(dataOnBLE[2],current_year,current_month,current_day-12,current_day);
       }
+      if(dataOnBLE[1]=='m'){
+        int current_year=myRTC.year;
+        retrieveDataMonths(dataOnBLE[2], current_year);
+      }
+      if(dataOnBLE[1]=='y'){
+        retrieveDataYears(dataOnBLE[2]);
+      }
     }
-
   }
 };
 Modules *modules;
@@ -236,7 +307,6 @@ void loop() {
       modules->sendToBLE(TEMPREATURE,dht.tempreature);
       modules->sendToBLE(HUMIDITY,dht.humidity);
     }
-
     
   }
   modules->checkBLECommands();
