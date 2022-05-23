@@ -136,14 +136,25 @@ struct Modules {
   }
 
   void retrieveDataMonths(char &type, int &year) {
-    File year_dir = SD.open(String(type) + '/' + String(year) + '/');
+    String path=String(type) + '/' + String(year) + '/';
+    File year_dir = SD.open(path);
     bool save_avg=false;
     while (true) {
       File month_dir = year_dir.openNextFile();
-
+      String avg_file_path=path+String(month_dir.name())+"/_avg";
       if (!month_dir) {
         break;
       }
+      if(SD.exists(avg_file_path)){
+        File f=SD.open(avg_file_path);
+        Serial.println("avg file found!" + avg_file_path);
+        String line = f.readStringUntil('\n');
+        sendToBLE('\0',line.toFloat(),false);
+        month_dir.close();
+        f.close();
+        continue;
+      }
+      save_avg=!String(month_dir.name()).equals(String(myRTC.month));
       float month_avg_sum=0.0;
       uint8_t num_of_days=0;
       while(true){
@@ -155,31 +166,71 @@ struct Modules {
         num_of_days++;
         file.close();
       }
-      month_dir.close();
       float month_avg=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
+      if(save_avg){
+        File f=SD.open(avg_file_path,FILE_WRITE);
+        f.println(String(month_avg));
+        f.close();
+      }
       sendToBLE('\0',month_avg,false);//continue in mobile to check this code
+      month_dir.close();
     }
     year_dir.close();
     sendToBLE('h',-1);
     delay(200);
   }
   void retrieveDataYears(char type){
-
-    File type_dir = SD.open(String(type) + '/');
+    String base_path=String(type) + '/';
+    File type_dir = SD.open(base_path);
+    bool save_year_avg=false;
     while (true) {
     File year_dir = type_dir.openNextFile();
     if (!year_dir) {
         break;
     }
+    String year_avg_path=base_path+String(year_dir.name())+"/_avg";
+    String path=base_path+String(year_dir.name())+"/";
+    if(SD.exists(year_avg_path)){
+      File f=SD.open(year_avg_path);
+        Serial.println("avg year file found!" + year_avg_path);
+        String line = f.readStringUntil('\n');
+        sendToBLE('\0',line.toFloat(),false);
+        year_dir.close();
+        f.close();
+        continue;
+    }
+    save_year_avg=!String(year_dir.name()).equals(String(myRTC.year));
     float month_avgs=0.0;
     uint8_t num_of_months=0;
+    bool save_month_avg=false;
     while (true) {
       File month_dir = year_dir.openNextFile();
       if (!month_dir) {
         break;
     }
+    String month_avg_path=path+String(month_dir.name())+"/_avg";
+    if(SD.exists(month_avg_path)){
+        File f=SD.open(month_avg_path);
+        Serial.println("avg month file found!" + month_avg_path);
+        String line = f.readStringUntil('\n');
+
+        month_dir.close();
+        f.close();
+        continue;
+      }
+      save_month_avg=!String(month_dir.name()).equals(String(myRTC.month));
       float month_avg_sum=0.0;
       uint8_t num_of_days=0;
+      if(SD.exists(month_avg_path)){
+        File f=SD.open(month_avg_path);
+        Serial.println("avg month file found!" + month_avg_path);
+        String line = f.readStringUntil('\n');
+        month_avg_sum=line.toFloat();
+        num_of_days=1;
+        month_dir.close();
+        f.close();
+      }
+      else{
       while(true){
         File file = month_dir.openNextFile();
         if (!file) {
@@ -189,13 +240,25 @@ struct Modules {
         num_of_days++;
         file.close();
       }
+      }
       month_dir.close();
-      month_avgs+=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
+      float month_avg=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
+      if(save_month_avg){
+        File f=SD.open(month_avg_path,FILE_WRITE);
+        f.println(String(month_avg));
+        f.close();
+      }
+      month_avgs+=month_avg;
       num_of_months++;
       Serial.println(String(month_avgs)+" at "+String(month_dir.name()));
     }
     float year_avg=(num_of_months<=0) ? 0 : month_avgs / (num_of_months*1.0);
     Serial.println(String(year_avg)+" at "+String(year_dir.name()));
+    if(save_year_avg){
+      File f=SD.open(year_avg_path,FILE_WRITE);
+      f.println(String(year_avg));
+      f.close();
+    }
     sendToBLE('\0',year_avg,false);
     year_dir.close();
     }
