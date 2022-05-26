@@ -2,6 +2,8 @@
 #include <SD.h>
 #include <virtuabotixRTC.h>
 #include "DHT.h"
+#include <HX711_ADC.h>
+#include <EEPROM.h>
 
 #define DHTPIN 4
 #define DHTRESPONCE 6000
@@ -15,13 +17,19 @@
 
 #define HUMIDITY 'h'
 #define TEMPREATURE 't'
-
-#define HM10TX 2
+#define WEIGHT 'w'
+#define HM10TX 8
 #define HM10RX 3
 
 #define TIME_BETWEEN_SAVES 6000  // 1 MIN
 
 #define ACK_TIMEOUT_TIME 5000
+
+#define LOADCELL_DOUT_PIN 2
+#define LOADCELL_SCK_PIN 6
+#define CALVAL_EEPROMADRESS 0
+#define HX711_RESPONCE_TIME 1000
+#define TARE_TIMEOUT_TIME 4000
 
 struct DHTData {
   float tempreature;
@@ -43,16 +51,34 @@ struct DHTData {
 unsigned long DHTData::lastRead = millis();
 unsigned long DHTData::lastSaved = millis();
 
+
 struct Modules {
   DHT *dht;
+  HX711_ADC scale=HX711_ADC(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
   bool isSDinitialized;
   bool isBLEConnected;
   virtuabotixRTC myRTC = virtuabotixRTC(RTCCLK, RTCDAT, RTCRST);
   SoftwareSerial BTserial=SoftwareSerial(HM10TX, HM10RX);
+  long scale_last_read;
+  bool scale_ready_to_read;
   Modules() {
     dht = new DHT(DHTPIN, DHTTYPE);
     dht->begin();
     myRTC.updateTime();
+    scale_ready_to_read=false;
+    scale.begin();
+    scale.start(2000, true);
+    float calibrationValue;
+    EEPROM.get(CALVAL_EEPROMADRESS, calibrationValue);
+    if (scale.getTareTimeoutFlag()) {
+    Serial.println("Timeout, check MCU>HX711 wiring and pin designations");
+    while (1);
+    }
+    else{
+      scale.setCalFactor(calibrationValue); // set calibration value (float)
+      Serial.println("Startup is complete");
+    }
+    scale_last_read=millis();
     isSDinitialized = SD.begin(SDCSPIN);
     isBLEConnected=0;
     BTserial.begin(9600);
@@ -71,6 +97,26 @@ struct Modules {
     }
     return false;
   }
+  long readHX711(float &data){
+    if(millis() - scale_last_read > HX711_RESPONCE_TIME && scale_ready_to_read){
+      data=scale.getData();
+      scale_last_read=millis();
+      scale_ready_to_read=false;
+      return true;
+    }
+    return false;
+  }
+  bool tareScale(){
+    scale.tareNoDelay();
+    long start_wait=millis();
+    while(!scale.getTareStatus()){
+      if(millis() - start_wait >= TARE_TIMEOUT_TIME){
+        return false;
+      }
+    }
+    return true;
+  }
+
   File prepareToWrite(char &type) {
     myRTC.updateTime();
 
@@ -111,8 +157,34 @@ struct Modules {
     }
     return (count == 0) ? 0 : sum / (count * 1.0);
   }
-
-
+  float getMonthAvg(File &month,String avg_path="",bool save_avg=false){
+    if(avg_path.length()>0){
+      if(SD.exists(avg_path)){
+        File f=SD.open(avg_path);
+        String line = f.readStringUntil('\n');
+        f.close();
+        return line.toFloat();
+      }
+    }
+    float avg=0.0;
+    uint8_t num_of_days=0;
+    while(true){
+        File file = month.openNextFile();
+        if (!file) {
+          break;
+        }
+        avg += getDayAvg(file);
+        num_of_days++;
+        file.close();
+      }
+      float total_avg = (num_of_days>0) ? avg/(num_of_days*1.0) : 0;
+      if(save_avg){
+        File f=SD.open(avg_path,FILE_WRITE);
+        f.println(total_avg);
+        f.close();
+      }
+      return total_avg;
+  }
   void retrieveDataDays(char type, int year, uint8_t month, uint8_t from_day = 0, uint8_t to_day = 0) {
     File dir = SD.open(String(type) + '/' + String(year) + '/' + String(month) + '/');
     to_day = (to_day == 0) ? days_in_month(year, month) : to_day;
@@ -129,12 +201,11 @@ struct Modules {
         }
       float avg = getDayAvg(file);
       file.close();
-      sendToBLE('\0',avg,false);//continue in mobile to check this code
+      sendToBLE('\0',avg,false);
     }
     dir.close();
     sendToBLE('h',-1);
   }
-
   void retrieveDataMonths(char &type, int &year) {
     String path=String(type) + '/' + String(year) + '/';
     File year_dir = SD.open(path);
@@ -145,34 +216,9 @@ struct Modules {
       if (!month_dir) {
         break;
       }
-      if(SD.exists(avg_file_path)){
-        File f=SD.open(avg_file_path);
-        Serial.println("avg file found!" + avg_file_path);
-        String line = f.readStringUntil('\n');
-        sendToBLE('\0',line.toFloat(),false);
-        month_dir.close();
-        f.close();
-        continue;
-      }
       save_avg=!String(month_dir.name()).equals(String(myRTC.month));
-      float month_avg_sum=0.0;
-      uint8_t num_of_days=0;
-      while(true){
-        File file = month_dir.openNextFile();
-        if (!file) {
-          break;
-        }
-        month_avg_sum += getDayAvg(file);
-        num_of_days++;
-        file.close();
-      }
-      float month_avg=(num_of_days<=0) ? 0 : month_avg_sum/ (num_of_days*1.0);
-      if(save_avg){
-        File f=SD.open(avg_file_path,FILE_WRITE);
-        f.println(String(month_avg));
-        f.close();
-      }
-      sendToBLE('\0',month_avg,false);//continue in mobile to check this code
+      float month_avg=getMonthAvg(month_dir,avg_file_path,save_avg);
+      sendToBLE('\0',month_avg,false);
       month_dir.close();
     }
     year_dir.close();
@@ -213,7 +259,6 @@ struct Modules {
         File f=SD.open(month_avg_path);
         Serial.println("avg month file found!" + month_avg_path);
         String line = f.readStringUntil('\n');
-
         month_dir.close();
         f.close();
         continue;
@@ -315,16 +360,16 @@ struct Modules {
     Serial.println(dataOnBLE);
     if(dataOnBLE.startsWith("connected")){
       isBLEConnected=1;
-      return; 
+      return;
     }
     if(dataOnBLE.startsWith("disconnect")){
       isBLEConnected=0;
-      return; 
+      return;
     }
     if(dataOnBLE[0]=='h'){
       if (dataOnBLE[1]=='d') {
         this->myRTC.updateTime();
-        uint8_t from_day,to_day,current_day=myRTC.dayofmonth,current_month=myRTC.month;
+        uint8_t current_day=myRTC.dayofmonth,current_month=myRTC.month;
         int current_year=myRTC.year;
         if(current_day<12){
           retrieveDataDays(dataOnBLE[2],current_year,current_month,0,current_day);
@@ -351,15 +396,26 @@ struct Modules {
     }
   }
 };
+
+
 Modules *modules;
+
+void dataReadyISR() {
+  if (modules->scale.update()) {
+    modules->scale_ready_to_read = true;
+  }
+}
+
 void setup() {
   Serial.begin(9600);
   modules = new Modules();
+  attachInterrupt(digitalPinToInterrupt(LOADCELL_DOUT_PIN), dataReadyISR, FALLING);
 }
 
 void loop() {
   DHTData dht;
-  String data;
+  float scale_data;
+
   if (modules->readDHT(dht)) { // TODO: if the data is equal to the last read data dont enter
     if (DHTData::isTimeToSave()) {
       modules->writeToSD(HUMIDITY, dht.humidity);
@@ -370,7 +426,12 @@ void loop() {
       modules->sendToBLE(TEMPREATURE,dht.tempreature);
       modules->sendToBLE(HUMIDITY,dht.humidity);
     }
-    
   }
+if(modules->isBLEConnected){
+  if(modules->readHX711(scale_data)){
+      modules->sendToBLE(WEIGHT,scale_data);
+    }
+  }
+  delay(1000);
   modules->checkBLECommands();
 }
