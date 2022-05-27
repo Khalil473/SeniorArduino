@@ -1,6 +1,6 @@
- //Sender Code
+ //Receiver code
  #include <SoftwareSerial.h>
- SoftwareSerial link(3, 2); // Rx, Tx
+ SoftwareSerial link(A0, A1); // Rx, Tx
   
 
   void setup() 
