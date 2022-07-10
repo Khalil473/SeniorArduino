@@ -74,6 +74,7 @@ struct Modules {
     float calibrationValue;
     EEPROM.get(CALVAL_EEPROMADRESS, calibrationValue);
     if (scale.getTareTimeoutFlag()) {
+      Serial.println("HX711 error");
     while (1);
     }
     else{
@@ -81,6 +82,10 @@ struct Modules {
     }
     scale_last_read=millis();
     isSDinitialized = SD.begin(SDCSPIN);
+    if(!isSDinitialized){
+      Serial.println("SD error");
+      while (1);
+    }
     isBLEConnected=0;
     BTserial.begin(9600);
   }
@@ -98,7 +103,7 @@ struct Modules {
     }
     return false;
   }
-  long readHX711(float &data){
+  bool readHX711(float &data){
     if(millis() - scale_last_read > HX711_RESPONCE_TIME && scale_ready_to_read){
       data=scale.getData();
       scale_last_read=millis();
@@ -341,7 +346,6 @@ struct Modules {
     while(!isAckRecived())
     {
       if(millis()-startWait>ACK_TIMEOUT_TIME){// time out waiting for ack
-        isBLEConnected=0;
         Serial.println("time out");
         return 0;
       }
@@ -388,9 +392,14 @@ struct Modules {
       }
     }
     if(dataOnBLE[0]=='t'){
-      is_weight_set=tareScale();
+      is_weight_set=true;
     }
   }
+  /*void readFromLeft(float &data){
+    if(Serial.available()){
+      data=Serial.parseFloat();
+    }
+  }*/
 };
 
 
@@ -406,10 +415,11 @@ void setup() {
   Serial.begin(9600);
   modules = new Modules();
   attachInterrupt(digitalPinToInterrupt(LOADCELL_DOUT_PIN), dataReadyISR, FALLING);
+  Serial.println("Setup complete");
 }
+
 DHTData dht;
-float scale_data;
-float last_sent_humidity,last_sent_temp,last_sent_scale,last_sent_carried;
+float last_sent_humidity,last_sent_temp,last_sent_scale,scale_data,carried_weight;
 void send_current_data(){
   if(!modules->isBLEConnected) return;
   if(last_sent_humidity!=dht.humidity){
@@ -420,22 +430,21 @@ void send_current_data(){
     modules->sendToBLE(TEMPREATURE, dht.tempreature);
     last_sent_temp=dht.tempreature;
   }
-  if(!is_weight_set){
-    modules->sendToBLE(WEIGHT,scale_data);
-  }
-  else if(last_sent_carried!=scale_data){
-    modules->sendToBLE(CARRIED,scale_data);
-    modules->sendToBLE(WEIGHT,last_sent_scale);
-    last_sent_carried=scale_data; 
-  }
+  modules->sendToBLE(CARRIED,carried_weight);
+  modules->sendToBLE(WEIGHT,last_sent_scale);
 }
 
 void update_readings(){
+  //modules->readFromLeft(data_from_left);
   modules->readDHT(dht);
   modules->readHX711(scale_data);
-    if(!is_weight_set){
+  //scale_data+=data_from_left;
+  if(!is_weight_set){
     last_sent_scale=scale_data;
-    }
+  }
+  else{
+    carried_weight=scale_data-last_sent_scale;
+  }
 }
 
 void check_ble_commands(){
@@ -451,10 +460,10 @@ void save_to_SD(){
   if(!is_weight_set) modules->writeToSD(WEIGHT, scale_data);
   else modules->writeToSD(CARRIED, scale_data);
 }
-TimedAction update(1000,update_readings);
+TimedAction update(500,update_readings);
 TimedAction ble(100,check_ble_commands);
-TimedAction saveData(1000*10,save_to_SD);
-TimedAction sendCurrentData(2000,send_current_data);
+TimedAction saveData(1000*60*10,save_to_SD);
+TimedAction sendCurrentData(1000,send_current_data);
 void loop() {
   update.check();
   ble.check();
