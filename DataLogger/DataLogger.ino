@@ -22,7 +22,7 @@
 #define CARRIED 'c'
 #define HM10TX 8
 #define HM10RX 2
-
+#define VIBRATOR_PIN A0
 #define TIME_BETWEEN_SAVES 6000  // 1 MIN
 
 #define ACK_TIMEOUT_TIME 5000
@@ -414,6 +414,7 @@ void dataReadyISR() {
 void setup() {
   Serial.begin(9600);
   modules = new Modules();
+  pinMode(VIBRATOR_PIN,OUTPUT);
   attachInterrupt(digitalPinToInterrupt(LOADCELL_DOUT_PIN), dataReadyISR, FALLING);
   Serial.println("Setup complete");
 }
@@ -444,6 +445,8 @@ void update_readings(){
   }
   else{
     carried_weight=scale_data-last_sent_scale;
+    if(carried_weight>15000 || dht.tempreature>35 || dht.humidity>75) digitalWrite(VIBRATOR_PIN,HIGH);
+    else digitalWrite(VIBRATOR_PIN,LOW);
   }
 }
 
